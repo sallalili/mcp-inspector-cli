@@ -1,0 +1,10 @@
+# MCP Inspector CLI Requirements
+# This project uses only Python standard library modules
+# No third-party dependencies required
+
+# For development and testing (optional):
+# pytest>=7.0.0
+# black>=22.0.0
+# flake8>=4.0.0
+
+# Python version requirement: >= 3.11
