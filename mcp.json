@@ -52,8 +52,16 @@
         "command": "/bin/bash",
         "args": [
           "-c",
+          "cd /opt/agents/mcp-research-server-s && source .venv/bin/activate && python main.py"
+        ]
+      },
+      "research-scholar-venv-verbose": {
+        "command": "/bin/bash",
+        "args": [
+          "-c",
           "cd /opt/agents/mcp-research-server-s && source .venv/bin/activate && python main.py --verbose"
         ]
       }
+
     }
 }

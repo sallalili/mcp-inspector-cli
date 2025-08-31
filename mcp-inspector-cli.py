@@ -15,17 +15,25 @@ def _timestamp() -> str:
     return datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
 
-# ANSI colors (auto-disable in basic consoles)
+# ANSI colors (auto-disable in basic consoles) - Dark Theme
 ANSI_SUPPORTED = os.name != "nt" or os.environ.get("WT_SESSION") or os.environ.get("ANSICON")
 RESET = "\x1b[0m" if ANSI_SUPPORTED else ""
-GREEN = "\x1b[32m" if ANSI_SUPPORTED else ""
-RED = "\x1b[31m" if ANSI_SUPPORTED else ""
-YELLOW = "\x1b[33m" if ANSI_SUPPORTED else ""
-CYAN = "\x1b[36m" if ANSI_SUPPORTED else ""
-BLUE = "\x1b[34m" if ANSI_SUPPORTED else ""
-DARK_GRAY = "\x1b[90m" if ANSI_SUPPORTED else ""
-MAGENTA = "\x1b[35m" if ANSI_SUPPORTED else ""
-WHITE = "\x1b[37m" if ANSI_SUPPORTED else ""
+GREEN = "\x1b[32m" if ANSI_SUPPORTED else ""        # Keep green for success
+RED = "\x1b[31m" if ANSI_SUPPORTED else ""          # Keep red for errors
+YELLOW = "\x1b[33m" if ANSI_SUPPORTED else ""       # Keep yellow for warnings
+CYAN = "\x1b[36m" if ANSI_SUPPORTED else ""         # Keep cyan for headers
+BLUE = "\x1b[34m" if ANSI_SUPPORTED else ""         # Keep blue for links/URIs
+DARK_GRAY = "\x1b[90m" if ANSI_SUPPORTED else ""    # Dark gray for secondary info
+MAGENTA = "\x1b[35m" if ANSI_SUPPORTED else ""      # Keep magenta for requests
+WHITE = "\x1b[37m" if ANSI_SUPPORTED else ""        # Keep white for primary text
+
+# Readable dark theme colors
+DIM_GREEN = "\x1b[32m" if ANSI_SUPPORTED else ""    # Standard green for accents
+DIM_BLUE = "\x1b[34m" if ANSI_SUPPORTED else ""     # Standard blue for highlights  
+DIM_CYAN = "\x1b[36m" if ANSI_SUPPORTED else ""     # Standard cyan for headers
+DIM_WHITE = "\x1b[37m" if ANSI_SUPPORTED else ""    # Standard white for emphasis
+GRAY = "\x1b[90m" if ANSI_SUPPORTED else ""         # Dark gray for descriptions
+DARKER_GRAY = "\x1b[2m" if ANSI_SUPPORTED else ""   # Very dark gray for subtle text
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -68,6 +76,149 @@ class MCPTester:
     def print_and_log(self, line: str) -> None:
         print(line)
         self.log_line(line)
+
+    def colored_print(self, line: str, color: str, end: str = "\n") -> None:
+        """Print with color (for display only, not logged)"""
+        print(f"{color}{line}{RESET}", end=end)
+
+    def display_tools_list(self, tools: List[Dict[str, Any]]) -> None:
+        """Display tools in a compact list format"""
+        if self.selected_index >= 0 and self.selected_index < len(self.servers):
+            server_name, _, _ = self.servers[self.selected_index]
+            self.colored_print(f"═══════ List of Tools from \"{server_name}\" ═══════", DIM_CYAN)
+        else:
+            self.colored_print("═══════════════════ List of Tools ═══════════════════", DIM_CYAN)
+
+        print()
+        if not tools:
+            self.colored_print("No tools available.", YELLOW)
+            return
+
+        # Display tools in compact format - just names
+        for idx, tool in enumerate(tools):
+            name = tool.get('name', 'Unknown')
+            print(f"[{idx}] {name}")
+
+    def display_tool_details(self, tool: Dict[str, Any]) -> None:
+        """Display detailed information about a specific tool"""
+        name = tool.get('name', 'Unknown')
+        description = tool.get('description', '').strip()
+        input_schema = tool.get('inputSchema', {})
+        
+        print()
+        self.colored_print(f"═══════ Tool Details: {name} ═══════", DIM_CYAN)
+        print()
+        
+        if description:
+            self.colored_print("Description:", DIM_GREEN)
+            lines = description.split('\n')
+            for line in lines:
+                if line.strip():
+                    print(f"  {line}")
+            print()
+        
+        # Display parameter information if available
+        properties = input_schema.get('properties', {})
+        required = input_schema.get('required', [])
+        
+        if properties:
+            self.colored_print("Parameters:", DIM_GREEN)
+            for param_name, param_info in properties.items():
+                param_type = param_info.get('type', 'any')
+                param_desc = param_info.get('description', '')
+                default_val = param_info.get('default')
+                is_required = param_name in required
+                
+                status = "required" if is_required else "optional"
+                if default_val is not None:
+                    status += f", default: {default_val}"
+                
+                print(f"  • {param_name} ({param_type}) - {status}")
+                if param_desc:
+                    print(f"    {param_desc}")
+        else:
+            self.colored_print("Parameters: None", DIM_GREEN)
+        print()
+
+    def display_resources_list(self, resources: List[Dict[str, Any]]) -> None:
+        """Display resources in a human-readable format with dark theme"""
+        if self.selected_index >= 0 and self.selected_index < len(self.servers):
+            server_name, _, _ = self.servers[self.selected_index]
+            self.colored_print(f"═══════ List of Resources from \"{server_name}\" ═══════", DIM_CYAN)
+        else:
+            self.colored_print("═══════════════════ List of Resources ═══════════════════", DIM_CYAN)
+
+        print()
+        if not resources:
+            self.colored_print("No resources available.", YELLOW)
+            return
+
+        for idx, resource in enumerate(resources):
+            uri = resource.get('uri', 'Unknown')
+            name = resource.get('name', '')
+            description = resource.get('description', '').strip()
+            mime_type = resource.get('mimeType', '')
+
+            # Display resource number and URI in darker colors
+            self.colored_print(f"[{idx}] ", DIM_GREEN, end="")
+            self.colored_print(f"{uri}", DIM_BLUE, end="")
+
+            # Display name if different from URI
+            if name and name != uri:
+                self.colored_print(f" ({name})", DIM_WHITE, end="")
+
+            # Display MIME type if available
+            if mime_type:
+                self.colored_print(f" [{mime_type}]", YELLOW, end="")
+
+            # Display description if available in subdued gray
+            if description:
+                print()  # New line
+                lines = description.split('\n')
+                for line in lines:
+                    if line.strip():
+                        self.colored_print(f"   {line}", GRAY)
+            print()  # Empty line between resources
+
+    def display_prompts_list(self, prompts: List[Dict[str, Any]]) -> None:
+        """Display prompts in a human-readable format with dark theme"""
+        if self.selected_index >= 0 and self.selected_index < len(self.servers):
+            server_name, _, _ = self.servers[self.selected_index]
+            self.colored_print(f"═══════ List of Prompts from \"{server_name}\" ═══════", DIM_CYAN)
+        else:
+            self.colored_print("═══════════════════ List of Prompts ═══════════════════", DIM_CYAN)
+
+        print()
+        if not prompts:
+            self.colored_print("No prompts available.", YELLOW)
+            return
+
+        for idx, prompt in enumerate(prompts):
+            name = prompt.get('name', 'Unknown')
+            description = prompt.get('description', '').strip()
+            arguments = prompt.get('arguments', {})
+
+            # Display prompt number and name in darker colors
+            self.colored_print(f"[{idx}] ", DIM_GREEN, end="")
+            self.colored_print(f"{name}", DIM_WHITE, end="")
+
+            # Display arguments info if available
+            if arguments and isinstance(arguments, dict):
+                props = arguments.get('properties', {})
+                if props:
+                    arg_names = list(props.keys())
+                    self.colored_print(f" (args: {', '.join(arg_names)})", YELLOW, end="")
+
+            # Display description if available in subdued gray
+            if description:
+                print()  # New line
+                lines = description.split('\n')
+                for line in lines:
+                    if line.strip():
+                        self.colored_print(f"   {line}", GRAY)
+            else:
+                self.colored_print(" (no description)", DARK_GRAY)
+            print()  # Empty line between prompts
 
     def summary(self, title: str, attempted: str, response: Optional[Dict[str, Any]]) -> None:
         success = response is not None and "error" not in response
@@ -154,7 +305,8 @@ class MCPTester:
         # Interactive selection
         print("Available MCP servers:")
         for idx, (name, cmd, cwd) in enumerate(self.servers):
-            print(f"{idx}: {name} -> {cmd} (cwd={cwd})")
+            bold_name = f"\x1b[1m{name}\x1b[0m" if ANSI_SUPPORTED else name
+            print(f"{idx}: {bold_name} -> {cmd} (cwd={cwd})")
         sel = input("Select server index (or blank to cancel): ").strip()
         if not sel:
             return False
@@ -502,7 +654,17 @@ class MCPTester:
 
         # If properties exist but no required parameters, offer to skip or provide values
         if properties and not required:
-            choice = input("Tool has optional parameters. Enter values? [y/N]: ").strip().lower()
+            # Show available optional parameters
+            param_names = []
+            for name, prop in properties.items():
+                title = prop.get("title") or name
+                param_type = prop.get("type", "any")
+                default_val = prop.get("default", "none")
+                param_names.append(f"{title} ({param_type}, default: {default_val})")
+
+            params_list = ", ".join(param_names)
+            self.colored_print(f"Optional parameters: {params_list}", CYAN)
+            choice = input("Enter values for optional parameters? [y/N]: ").strip().lower()
             if choice not in ('y', 'yes'):
                 self.print_and_log(f"[{_timestamp()}] Using default values for optional parameters")
                 # Use default values for optional parameters
@@ -545,11 +707,11 @@ class MCPTester:
                     self.log_line(_strip_ansi(self.last_status_colored))
             if self.last_result_preview:
                 self.print_and_log(self.last_result_preview)
-            self.print_and_log(f"{CYAN}=== MCP Tester Menu ==={RESET}")
+            self.colored_print("=== MCP Tester Menu ===", DIM_CYAN)
             # Display current server info
             if self.selected_index >= 0 and self.selected_index < len(self.servers):
                 server_name, _, server_cwd = self.servers[self.selected_index]
-                print(f"{GREEN}Connected to: {server_name}{RESET}")
+                self.colored_print(f"Connected to: {server_name}", DIM_GREEN)
                 print(f"Working directory: {server_cwd}")
             print()
             print("[t] List and call tools")
@@ -557,6 +719,7 @@ class MCPTester:
             print("[p] List and get prompts")
             print("[o] Show recent stdout/stderr")
             print("[l] Show session log path")
+            print("[c] Show color legend")
             print("[s] Switch server")
             print("[q] Quit")
             choice = input("> ").strip().lower()
@@ -570,15 +733,13 @@ class MCPTester:
                         _, tools_cache = self.list_tools()
                     tools = tools_cache or []
                     if not tools:
-                        print("No tools available or tools/list failed.")
+                        self.colored_print("No tools available or tools/list failed.", RED)
                         break
-                    if self.selected_index >= 0 and self.selected_index < len(self.servers):
-                        server_name, _, _ = self.servers[self.selected_index]
-                        print(f"{CYAN}--- Tools ({server_name}) ---{RESET}")
-                    else:
-                        print(f"{CYAN}--- Tools ---{RESET}")
-                    for idx, tool in enumerate(tools):
-                        print(f"[{idx}] {tool.get('name')}")
+
+                    # Display tools in human-readable format
+                    self.display_tools_list(tools)
+
+                    # Display selection options
                     print("[r] refresh    [b] back to main    [q] quit")
                     sel = input("> ").strip().lower()
                     if not sel:
@@ -599,29 +760,38 @@ class MCPTester:
                     if index < 0 or index >= len(tools):
                         print("Index out of range.")
                         continue
+                    
+                    # Show tool details first
                     tool = tools[index]
-                    name = tool.get("name")
-                    input_schema = tool.get("inputSchema") or {}
-                    args = self.prompt_for_args_from_schema(input_schema)
-                    self.call_tool(name, args)
-                    # After a tool call, allow repeated calls or selecting another tool
-                    again = input("Call another tool? [Enter=yes / b=back]: ").strip().lower()
-                    if again == "b":
-                        break
-                    # otherwise loop to tool list again
+                    self.display_tool_details(tool)
+                    
+                    # Ask user what to do next
+                    action = input("Action: [c]all tool, [b]ack to list, [q]uit: ").strip().lower()
+                    if action == "b" or action == "":
+                        continue  # Go back to tool list
+                    elif action == "q":
+                        return  # Quit entirely
+                    elif action == "c":
+                        # Call the tool
+                        name = tool.get("name")
+                        input_schema = tool.get("inputSchema") or {}
+                        args = self.prompt_for_args_from_schema(input_schema)
+                        self.call_tool(name, args)
+                        # After tool call, go back to tool list
+                        continue
+                    else:
+                        print("Invalid action. Returning to tool list.")
+                        continue
 
             elif choice == "r":
                 _, resources = self.list_resources()
                 if not resources:
-                    print("No resources available or resources/list failed.")
+                    self.colored_print("No resources available or resources/list failed.", RED)
                     continue
-                if self.selected_index >= 0 and self.selected_index < len(self.servers):
-                    server_name, _, _ = self.servers[self.selected_index]
-                    print(f"{CYAN}--- Resources ({server_name}) ---{RESET}")
-                else:
-                    print(f"{CYAN}--- Resources ---{RESET}")
-                for idx, res in enumerate(resources):
-                    print(f"[{idx}] {res.get('uri')}")
+
+                # Display resources in human-readable format
+                self.display_resources_list(resources)
+
                 sel = input("Select resource index to read (or blank to cancel): ").strip()
                 if not sel:
                     continue
@@ -642,15 +812,12 @@ class MCPTester:
             elif choice == "p":
                 _, prompts = self.list_prompts()
                 if not prompts:
-                    print("No prompts available or prompts/list failed.")
+                    self.colored_print("No prompts available or prompts/list failed.", RED)
                     continue
-                if self.selected_index >= 0 and self.selected_index < len(self.servers):
-                    server_name, _, _ = self.servers[self.selected_index]
-                    print(f"{CYAN}--- Prompts ({server_name}) ---{RESET}")
-                else:
-                    print(f"{CYAN}--- Prompts ---{RESET}")
-                for idx, pr in enumerate(prompts):
-                    print(f"[{idx}] {pr.get('name')}")
+
+                # Display prompts in human-readable format
+                self.display_prompts_list(prompts)
+
                 sel = input("Select prompt index to get (or blank to cancel): ").strip()
                 if not sel:
                     continue
