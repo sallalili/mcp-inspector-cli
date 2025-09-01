@@ -10,30 +10,70 @@ from collections import deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+# Rich imports for enhanced terminal output
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+from rich.columns import Columns
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.syntax import Syntax
+from rich.theme import Theme
+from rich.live import Live
+from rich.layout import Layout
+from rich.align import Align
+
 
 def _timestamp() -> str:
     return datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
 
-# ANSI colors (auto-disable in basic consoles) - Dark Theme
+# Rich theme and console setup for enhanced terminal output
+# Adjusted for readability on both dark and light backgrounds
+RICH_THEME = Theme({
+    "success": "green",
+    "error": "red",
+    "warning": "dark_orange3",
+    "info": "blue",
+    "accent": "blue",
+    "secondary": "grey30",
+    "muted": "grey27",
+    "highlight": "bold blue",
+    "header": "bold blue",
+    "timestamp": "grey30",
+    "json": "green",
+    "uri": "blue underline",
+    "parameter": "magenta",
+    "description": "grey23",
+    "border": "grey35",
+    "table.header": "bold blue",
+    "table.border": "grey35",
+    "panel.border": "grey35",
+    "panel.title": "bold blue",
+})
+
+# Global console instance
+console = Console(theme=RICH_THEME)
+
+# Legacy ANSI color support for backward compatibility
 ANSI_SUPPORTED = os.name != "nt" or os.environ.get("WT_SESSION") or os.environ.get("ANSICON")
 RESET = "\x1b[0m" if ANSI_SUPPORTED else ""
-GREEN = "\x1b[32m" if ANSI_SUPPORTED else ""        # Keep green for success
-RED = "\x1b[31m" if ANSI_SUPPORTED else ""          # Keep red for errors
-YELLOW = "\x1b[33m" if ANSI_SUPPORTED else ""       # Keep yellow for warnings
-CYAN = "\x1b[36m" if ANSI_SUPPORTED else ""         # Keep cyan for headers
-BLUE = "\x1b[34m" if ANSI_SUPPORTED else ""         # Keep blue for links/URIs
-DARK_GRAY = "\x1b[90m" if ANSI_SUPPORTED else ""    # Dark gray for secondary info
-MAGENTA = "\x1b[35m" if ANSI_SUPPORTED else ""      # Keep magenta for requests
-WHITE = "\x1b[37m" if ANSI_SUPPORTED else ""        # Keep white for primary text
+GREEN = "\x1b[32m" if ANSI_SUPPORTED else ""
+RED = "\x1b[31m" if ANSI_SUPPORTED else ""
+YELLOW = "\x1b[33m" if ANSI_SUPPORTED else ""
+CYAN = "\x1b[36m" if ANSI_SUPPORTED else ""
+BLUE = "\x1b[34m" if ANSI_SUPPORTED else ""
+DARK_GRAY = "\x1b[90m" if ANSI_SUPPORTED else ""
+MAGENTA = "\x1b[35m" if ANSI_SUPPORTED else ""
+WHITE = "\x1b[37m" if ANSI_SUPPORTED else ""
 
-# Readable dark theme colors
-DIM_GREEN = "\x1b[32m" if ANSI_SUPPORTED else ""    # Standard green for accents
-DIM_BLUE = "\x1b[34m" if ANSI_SUPPORTED else ""     # Standard blue for highlights  
-DIM_CYAN = "\x1b[36m" if ANSI_SUPPORTED else ""     # Standard cyan for headers
-DIM_WHITE = "\x1b[37m" if ANSI_SUPPORTED else ""    # Standard white for emphasis
-GRAY = "\x1b[90m" if ANSI_SUPPORTED else ""         # Dark gray for descriptions
-DARKER_GRAY = "\x1b[2m" if ANSI_SUPPORTED else ""   # Very dark gray for subtle text
+# Readable dark theme colors (legacy)
+DIM_GREEN = "\x1b[32m" if ANSI_SUPPORTED else ""
+DIM_BLUE = "\x1b[34m" if ANSI_SUPPORTED else ""
+DIM_CYAN = "\x1b[36m" if ANSI_SUPPORTED else ""
+DIM_WHITE = "\x1b[37m" if ANSI_SUPPORTED else ""
+GRAY = "\x1b[90m" if ANSI_SUPPORTED else ""
+DARKER_GRAY = "\x1b[2m" if ANSI_SUPPORTED else ""
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -49,6 +89,9 @@ class MCPTester:
         self.session_stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.log_path = os.path.join(self.working_dir, f"session-{self.session_stamp}.txt")
 
+        # Rich console for enhanced output
+        self.console = Console(theme=RICH_THEME)
+
         self.process: Optional[subprocess.Popen[str]] = None
         self.id_to_response: Dict[int, Dict[str, Any]] = {}
         self.id_lock = threading.Lock()
@@ -59,11 +102,33 @@ class MCPTester:
         self.last_status_colored: Optional[str] = None
         self.last_result_preview: Optional[str] = None
         self.last_status_time: float = 0.0
+
+        # Progress tracking for long operations
+        self.current_progress: Optional[Progress] = None
+        self.live_display: Optional[Live] = None
+
         # server selection support
         self.servers: List[Tuple[str, List[str], str]] = []  # (name, command_with_args, cwd)
         self.selected_index: int = -1
         self.selected_cmd: Optional[List[str]] = None
         self.selected_cwd: Optional[str] = None
+
+    def start_progress(self, description: str, total: Optional[float] = None) -> None:
+        """Start a progress indicator for long-running operations"""
+        self.current_progress = Progress(
+            SpinnerColumn(),
+            TextColumn(f"[bold blue]{description}"),
+            TimeElapsedColumn(),
+        )
+        self.live_display = Live(self.current_progress, console=self.console, refresh_per_second=4)
+        self.live_display.start()
+
+    def stop_progress(self) -> None:
+        """Stop the current progress indicator"""
+        if self.live_display:
+            self.live_display.stop()
+            self.live_display = None
+            self.current_progress = None
 
     # ---------- logging ----------
     def log_line(self, line: str) -> None:
@@ -72,6 +137,21 @@ class MCPTester:
                 f.write(_strip_ansi(line) + "\n")
         except Exception:
             pass
+
+    @staticmethod
+    def _trim_before_doc_sections(text: str) -> str:
+        """Return text up to the first doc section heading like Args/Parameters/Returns.
+
+        This keeps the human-readable summary while hiding verbose sections
+        that duplicate information shown elsewhere in the UI.
+        """
+        if not text:
+            return text
+        match = re.search(r"\n\s*(Args?|Arguments?|Parameters?|Returns?|Examples?|Usage|Notes?)\s*:\s*",
+                          text, flags=re.IGNORECASE)
+        if match:
+            return text[: match.start()].strip()
+        return text.strip()
 
     def print_and_log(self, line: str) -> None:
         print(line)
@@ -82,160 +162,273 @@ class MCPTester:
         print(f"{color}{line}{RESET}", end=end)
 
     def display_tools_list(self, tools: List[Dict[str, Any]]) -> None:
-        """Display tools in a compact list format"""
+        """Display tools in an enhanced table format using Rich"""
+        # Create server info text
         if self.selected_index >= 0 and self.selected_index < len(self.servers):
             server_name, _, _ = self.servers[self.selected_index]
-            self.colored_print(f"═══════ List of Tools from \"{server_name}\" ═══════", DIM_CYAN)
+            title = f"Tools from \"{server_name}\""
         else:
-            self.colored_print("═══════════════════ List of Tools ═══════════════════", DIM_CYAN)
+            title = "Available Tools"
 
-        print()
         if not tools:
-            self.colored_print("No tools available.", YELLOW)
+            panel = Panel(
+                "[warning]No tools available.[/warning]",
+                title=title,
+                border_style="panel.border",
+                title_align="left"
+            )
+            self.console.print(panel)
             return
 
-        # Display tools in compact format - just names
+        # Create table for tools
+        table = Table(
+            title=title,
+            title_style="panel.title",
+            header_style="table.header",
+            border_style="table.border",
+            show_lines=True
+        )
+
+        table.add_column("#", style="bold", justify="right", width=3)
+        table.add_column("Tool Name", style="bold", width=25)
+        table.add_column("Description", style="description", width=50, overflow="fold")
+        table.add_column("Parameters", style="parameter", width=20)
+
         for idx, tool in enumerate(tools):
             name = tool.get('name', 'Unknown')
-            print(f"[{idx}] {name}")
+            description = self._trim_before_doc_sections(tool.get('description', '').strip())
+
+            # Get parameter count from inputSchema
+            input_schema = tool.get('inputSchema', {})
+            properties = input_schema.get('properties', {})
+            param_count = len(properties) if properties else 0
+            param_info = f"{param_count} params" if param_count > 0 else "None"
+
+            # Show full description (wrapped in cell)
+
+            table.add_row(
+                str(idx),
+                name,
+                description or "[dim]No description[/dim]",
+                param_info
+            )
+
+        self.console.print(table)
 
     def display_tool_details(self, tool: Dict[str, Any]) -> None:
-        """Display detailed information about a specific tool"""
+        """Display detailed information about a specific tool using Rich panels"""
         name = tool.get('name', 'Unknown')
         description = tool.get('description', '').strip()
         input_schema = tool.get('inputSchema', {})
-        
-        print()
-        self.colored_print(f"═══════ Tool Details: {name} ═══════", DIM_CYAN)
-        print()
-        
+
+        # Main tool info panel
+        content_lines = []
         if description:
-            self.colored_print("Description:", DIM_GREEN)
-            lines = description.split('\n')
-            for line in lines:
-                if line.strip():
-                    print(f"  {line}")
-            print()
-        
+            content_lines.append(f"[bold green]Description:[/bold green]")
+            content_lines.append(f"{description}")
+            content_lines.append("")  # Empty line
+
         # Display parameter information if available
         properties = input_schema.get('properties', {})
         required = input_schema.get('required', [])
-        
+
         if properties:
-            self.colored_print("Parameters:", DIM_GREEN)
+            content_lines.append("[bold green]Parameters:[/bold green]")
             for param_name, param_info in properties.items():
                 param_type = param_info.get('type', 'any')
                 param_desc = param_info.get('description', '')
                 default_val = param_info.get('default')
                 is_required = param_name in required
-                
-                status = "required" if is_required else "optional"
+
+                status_parts = []
+                if is_required:
+                    status_parts.append("[red]required[/red]")
+                else:
+                    status_parts.append("[yellow]optional[/yellow]")
                 if default_val is not None:
-                    status += f", default: {default_val}"
-                
-                print(f"  • {param_name} ({param_type}) - {status}")
+                    status_parts.append(f"default: [cyan]{default_val}[/cyan]")
+
+                status = ", ".join(status_parts)
+
+                content_lines.append(f"  • [bold]{param_name}[/bold] ([blue]{param_type}[/blue]) - {status}")
                 if param_desc:
-                    print(f"    {param_desc}")
+                    content_lines.append(f"    [dim]{param_desc}[/dim]")
         else:
-            self.colored_print("Parameters: None", DIM_GREEN)
-        print()
+            content_lines.append("[bold green]Parameters:[/bold green] None")
+
+        content = "\n".join(content_lines)
+
+        panel = Panel(
+            content,
+            title=f"Tool Details: {name}",
+            title_align="left",
+            border_style="panel.border",
+            padding=(1, 2)
+        )
+
+        self.console.print(panel)
 
     def display_resources_list(self, resources: List[Dict[str, Any]]) -> None:
-        """Display resources in a human-readable format with dark theme"""
+        """Display resources in an enhanced table format using Rich"""
+        # Create server info text
         if self.selected_index >= 0 and self.selected_index < len(self.servers):
             server_name, _, _ = self.servers[self.selected_index]
-            self.colored_print(f"═══════ List of Resources from \"{server_name}\" ═══════", DIM_CYAN)
+            title = f"Resources from \"{server_name}\""
         else:
-            self.colored_print("═══════════════════ List of Resources ═══════════════════", DIM_CYAN)
+            title = "Available Resources"
 
-        print()
         if not resources:
-            self.colored_print("No resources available.", YELLOW)
+            panel = Panel(
+                "[warning]No resources available.[/warning]",
+                title=title,
+                border_style="panel.border",
+                title_align="left"
+            )
+            self.console.print(panel)
             return
+
+        # Create table for resources
+        table = Table(
+            title=title,
+            title_style="panel.title",
+            header_style="table.header",
+            border_style="table.border",
+            show_lines=True
+        )
+
+        table.add_column("#", style="bold", justify="right", width=3)
+        table.add_column("URI", style="uri", width=40)
+        table.add_column("Name", style="bold", width=20)
+        table.add_column("Type", style="parameter", width=15)
+        table.add_column("Description", style="description", width=50, overflow="fold")
 
         for idx, resource in enumerate(resources):
             uri = resource.get('uri', 'Unknown')
             name = resource.get('name', '')
-            description = resource.get('description', '').strip()
+            description = self._trim_before_doc_sections(resource.get('description', '').strip())
             mime_type = resource.get('mimeType', '')
 
-            # Display resource number and URI in darker colors
-            self.colored_print(f"[{idx}] ", DIM_GREEN, end="")
-            self.colored_print(f"{uri}", DIM_BLUE, end="")
+            # Format name - show URI if no name or if they're the same
+            display_name = name if name and name != uri else ""
 
-            # Display name if different from URI
-            if name and name != uri:
-                self.colored_print(f" ({name})", DIM_WHITE, end="")
+            # Truncate URI if too long
+            display_uri = uri
+            if len(display_uri) > 37:
+                display_uri = display_uri[:34] + "..."
 
-            # Display MIME type if available
-            if mime_type:
-                self.colored_print(f" [{mime_type}]", YELLOW, end="")
+            # Show full description (wrapped in cell)
 
-            # Display description if available in subdued gray
-            if description:
-                print()  # New line
-                lines = description.split('\n')
-                for line in lines:
-                    if line.strip():
-                        self.colored_print(f"   {line}", GRAY)
-            print()  # Empty line between resources
+            table.add_row(
+                str(idx),
+                display_uri,
+                display_name or "[dim]—[/dim]",
+                mime_type or "[dim]—[/dim]",
+                description or "[dim]No description[/dim]"
+            )
+
+        self.console.print(table)
 
     def display_prompts_list(self, prompts: List[Dict[str, Any]]) -> None:
-        """Display prompts in a human-readable format with dark theme"""
+        """Display prompts in an enhanced table format using Rich"""
+        # Create server info text
         if self.selected_index >= 0 and self.selected_index < len(self.servers):
             server_name, _, _ = self.servers[self.selected_index]
-            self.colored_print(f"═══════ List of Prompts from \"{server_name}\" ═══════", DIM_CYAN)
+            title = f"Prompts from \"{server_name}\""
         else:
-            self.colored_print("═══════════════════ List of Prompts ═══════════════════", DIM_CYAN)
+            title = "Available Prompts"
 
-        print()
         if not prompts:
-            self.colored_print("No prompts available.", YELLOW)
+            panel = Panel(
+                "[warning]No prompts available.[/warning]",
+                title=title,
+                border_style="panel.border",
+                title_align="left"
+            )
+            self.console.print(panel)
             return
+
+        # Create table for prompts
+        table = Table(
+            title=title,
+            title_style="panel.title",
+            header_style="table.header",
+            border_style="table.border",
+            show_lines=True
+        )
+
+        table.add_column("#", style="bold", justify="right", width=3)
+        table.add_column("Prompt Name", style="bold", width=25)
+        table.add_column("Arguments", style="parameter", width=25)
+        table.add_column("Description", style="description", width=60, overflow="fold")
 
         for idx, prompt in enumerate(prompts):
             name = prompt.get('name', 'Unknown')
-            description = prompt.get('description', '').strip()
+            description = self._trim_before_doc_sections(prompt.get('description', '').strip())
             arguments = prompt.get('arguments', {})
 
-            # Display prompt number and name in darker colors
-            self.colored_print(f"[{idx}] ", DIM_GREEN, end="")
-            self.colored_print(f"{name}", DIM_WHITE, end="")
-
-            # Display arguments info if available
+            # Format arguments info
+            arg_info = "[dim]None[/dim]"
             if arguments and isinstance(arguments, dict):
                 props = arguments.get('properties', {})
                 if props:
                     arg_names = list(props.keys())
-                    self.colored_print(f" (args: {', '.join(arg_names)})", YELLOW, end="")
+                    arg_info = f"[yellow]{', '.join(arg_names)}[/yellow]"
 
-            # Display description if available in subdued gray
-            if description:
-                print()  # New line
-                lines = description.split('\n')
-                for line in lines:
-                    if line.strip():
-                        self.colored_print(f"   {line}", GRAY)
-            else:
-                self.colored_print(" (no description)", DARK_GRAY)
-            print()  # Empty line between prompts
+            # Show full description (wrapped in cell)
+
+            table.add_row(
+                str(idx),
+                name,
+                arg_info,
+                description or "[dim]No description[/dim]"
+            )
+
+        self.console.print(table)
 
     def summary(self, title: str, attempted: str, response: Optional[Dict[str, Any]]) -> None:
         success = response is not None and "error" not in response
-        status = f"{GREEN}SUCCESS{RESET}" if success else f"{RED}ERROR{RESET}"
-        msg = f"[{_timestamp()}] {title}: {attempted} -> {status}"
-        # Console: colored; Log: stripped
-        print(msg)
-        self.log_line(_strip_ansi(msg))
+
+        # Create Rich status display
+        timestamp = _timestamp()
+        status_icon = "✅" if success else "❌"
+        status_style = "success" if success else "error"
+        status_text = "SUCCESS" if success else "ERROR"
+
+        # Create a panel for the summary
+        summary_content = f"[{timestamp}] {title}: {attempted}"
+        panel = Panel(
+            f"[{status_style}]{status_text}[/{status_style}]\n{summary_content}",
+            title="Operation Summary",
+            title_align="left",
+            border_style="border",
+            padding=(0, 1)
+        )
+
+        self.console.print(panel)
+
+        # Log the plain text version
+        msg = f"[{timestamp}] {title}: {attempted} -> {status_text}"
+        self.log_line(msg)
         self.last_status_colored = msg
         self.last_status_time = time.time()
+
         if not success:
             if response is None:
                 errline = "No response received. The server may have exited or timed out."
             else:
                 err = response.get("error", {})
                 errline = f"Error: code={err.get('code')} message={err.get('message')} data={err.get('data')}"
-            print(errline)
+
+            # Display error in a warning panel
+            error_panel = Panel(
+                f"[error]{errline}[/error]",
+                title="Error Details",
+                title_align="left",
+                border_style="red",
+                padding=(0, 1)
+            )
+            self.console.print(error_panel)
+
             self.log_line(errline)
             # Include detail in last preview, too
             self.last_result_preview = errline
@@ -432,10 +625,22 @@ class MCPTester:
         if self.selected_index >= 0 and self.selected_index < len(self.servers):
             server_name, _, _ = self.servers[self.selected_index]
 
-        # Enhanced logging format
+        # Enhanced logging format with Rich syntax highlighting
         timestamp = _timestamp()
         inspector_msg = f"INSPECTOR:{timestamp} {json.dumps(request, indent=2)}"
-        self.print_and_log(inspector_msg)
+
+        # Display request with Rich syntax highlighting
+        json_syntax = Syntax(json.dumps(request, indent=2), "json", theme="monokai", line_numbers=False)
+        request_panel = Panel(
+            json_syntax,
+            title=f"Request [{timestamp}]",
+            title_align="left",
+            border_style="cyan",
+            padding=(1, 2)
+        )
+        self.console.print(request_panel)
+
+        self.log_line(inspector_msg)
 
         msg_id = request.get("id")
         assert self.process and self.process.stdin
@@ -453,32 +658,61 @@ class MCPTester:
             while True:
                 if msg_id in self.id_to_response:
                     resp = self.id_to_response.pop(msg_id)
-                    # Enhanced logging format for responses
+                    # Enhanced logging format for responses with Rich syntax highlighting
                     timestamp = _timestamp()
                     mcp_msg = f"MCP-{server_name}:{timestamp} {json.dumps(resp, indent=2)}"
-                    self.print_and_log(mcp_msg)
+
+                    # Display response with Rich syntax highlighting
+                    json_syntax = Syntax(json.dumps(resp, indent=2), "json", theme="monokai", line_numbers=False)
+                    response_panel = Panel(
+                        json_syntax,
+                        title=f"Response from {server_name} [{timestamp}]",
+                        title_align="left",
+                        border_style="green",
+                        padding=(1, 2)
+                    )
+                    self.console.print(response_panel)
+
+                    self.log_line(mcp_msg)
                     return resp
                 remaining = timeout - (time.time() - start)
                 if remaining <= 0:
                     if not interactive_extend:
-                        self.print_and_log(f"[{_timestamp()}] ✖ Timeout waiting for response id={msg_id}")
+                        self.console.print(f"[error]✖ Timeout waiting for response id={msg_id}[/error]")
+                        self.log_line(f"[{_timestamp()}] ✖ Timeout waiting for response id={msg_id}")
                         return None
-                    # Ask user to extend wait without resending
+
+                    # Ask user to extend wait without resending - use Rich prompt
                     method = request.get("method", "?")
+                    self.start_progress(f"Waiting for {method} (id={msg_id})")
+
                     try:
-                        choice = input(
-                            f"Timed out waiting for {method} (id={msg_id}). Wait 30s more? [Y/n]: "
-                        ).strip().lower()
+                        # Create a prompt panel
+                        prompt_panel = Panel(
+                            f"Timed out waiting for [bold]{method}[/bold] (id={msg_id}).\n"
+                            "Wait 30 seconds more?",
+                            title="Timeout Decision",
+                            border_style="yellow",
+                            padding=(1, 2)
+                        )
+                        self.console.print(prompt_panel)
+
+                        choice = input("Choice [Y/n]: ").strip().lower()
                     except EOFError:
                         choice = "y"
+                    finally:
+                        self.stop_progress()
+
                     if choice in ("", "y", "yes"):
-                        self.print_and_log(f"[{_timestamp()}] Extending wait by 30s for id={msg_id}")
+                        self.console.print(f"[info]Extending wait by 30s for id={msg_id}[/info]")
+                        self.log_line(f"[{_timestamp()}] Extending wait by 30s for id={msg_id}")
                         # Reset timer and continue waiting
                         start = time.time()
                         timeout = 30.0
                         continue
                     else:
-                        self.print_and_log(f"[{_timestamp()}] User chose to stop waiting for id={msg_id}")
+                        self.console.print(f"[warning]User chose to stop waiting for id={msg_id}[/warning]")
+                        self.log_line(f"[{_timestamp()}] User chose to stop waiting for id={msg_id}")
                         return None
                 self.id_cv.wait(timeout=remaining)
 
@@ -707,22 +941,61 @@ class MCPTester:
                     self.log_line(_strip_ansi(self.last_status_colored))
             if self.last_result_preview:
                 self.print_and_log(self.last_result_preview)
-            self.colored_print("=== MCP Tester Menu ===", DIM_CYAN)
-            # Display current server info
+            # Create enhanced menu with Rich layout (numbered, no emojis)
+            menu_items = [
+                ("1", "List and call tools", "t"),
+                ("2", "List and read resources", "r"),
+                ("3", "List and get prompts", "p"),
+                ("4", "Show recent stdout/stderr", "o"),
+                ("5", "Show session log path", "l"),
+                ("6", "Show color legend", "c"),
+                ("7", "Switch server", "s"),
+                ("8", "Quit", "q"),
+            ]
+
+            # Create menu table
+            menu_table = Table(show_header=False, box=None, padding=(0, 2))
+            menu_table.add_column("#", style="bold", width=3, justify="right")
+            menu_table.add_column("Action", style="bold")
+            menu_table.add_column("Key", style="secondary", width=8)
+
+            for num, action, key in menu_items:
+                menu_table.add_row(num, action, f"[{key}]")
+
+            # Create server info panel
+            server_info = ""
             if self.selected_index >= 0 and self.selected_index < len(self.servers):
                 server_name, _, server_cwd = self.servers[self.selected_index]
-                self.colored_print(f"Connected to: {server_name}", DIM_GREEN)
-                print(f"Working directory: {server_cwd}")
-            print()
-            print("[t] List and call tools")
-            print("[r] List and read resources")
-            print("[p] List and get prompts")
-            print("[o] Show recent stdout/stderr")
-            print("[l] Show session log path")
-            print("[c] Show color legend")
-            print("[s] Switch server")
-            print("[q] Quit")
-            choice = input("> ").strip().lower()
+                server_info = f"[bold green]Connected to:[/bold green] {server_name}\n[dim]Working directory:[/dim] {server_cwd}"
+
+            # Main menu panel
+            menu_panel = Panel(
+                Align.center(menu_table),
+                title="MCP Tester Menu",
+                title_align="center",
+                border_style="panel.border",
+                padding=(1, 3)
+            )
+
+            self.console.print(menu_panel)
+
+            # Server info panel
+            if server_info:
+                server_panel = Panel(
+                    server_info,
+                    title="Server Connection",
+                    title_align="left",
+                    border_style="green",
+                    padding=(1, 2)
+                )
+                self.console.print(server_panel)
+            choice_raw = input("> ").strip().lower()
+            # Accept numeric shortcuts and letter keys
+            numeric_map = {
+                "1": "t", "2": "r", "3": "p", "4": "o",
+                "5": "l", "6": "c", "7": "s", "8": "q",
+            }
+            choice = numeric_map.get(choice_raw, choice_raw)
             self.log_line(f"[USER] menu choice: {choice or 'enter'}")
 
             if choice == "t":
@@ -906,63 +1179,95 @@ class MCPTester:
 
 
 def show_help() -> None:
-    """Display help information"""
-    help_text = f"""
-{__file__} - MCP Inspector CLI
+    """Display help information with Rich formatting"""
+    console = Console(theme=RICH_THEME)
 
-A comprehensive command-line tool for inspecting, testing, and debugging MCP (Model Context Protocol) servers.
+    # Title panel
+    title_panel = Panel(
+        Align.center(f"[bold]{__file__} - MCP Inspector CLI[/bold]\n\n[dim]A comprehensive command-line tool for inspecting, testing, and debugging MCP (Model Context Protocol) servers.[/dim]"),
+        border_style="panel.border",
+        padding=(1, 2)
+    )
+    console.print(title_panel)
+    console.print()
 
-USAGE:
-    python {__file__} [CONFIG_FILE] [--help]
+    # Usage section
+    usage_table = Table(show_header=False, box=None)
+    usage_table.add_column("Command", style="bold cyan")
+    usage_table.add_column("Description", style="white")
 
-ARGUMENTS:
-    CONFIG_FILE    Optional path to MCP configuration JSON file
-                   If not provided, searches for:
-                   - ./mcp.json (current directory)
-                   - ~/.cursor/mcp.json (user home)
+    usage_table.add_row("python mcp-inspector-cli.py", "[dim]Run with default configuration search[/dim]")
+    usage_table.add_row("python mcp-inspector-cli.py [CONFIG_FILE]", "[dim]Run with specific config file[/dim]")
+    usage_table.add_row("python mcp-inspector-cli.py --help", "[dim]Show this help message[/dim]")
 
-OPTIONS:
-    --help         Show this help message and exit
+    usage_panel = Panel(
+        usage_table,
+        title="Usage",
+        border_style="cyan",
+        padding=(1, 2)
+    )
+    console.print(usage_panel)
+    console.print()
 
-EXAMPLES:
-    # Run with default configuration search
-    python {__file__}
-
-    # Run with specific config file
-    python {__file__} /path/to/my/mcp-config.json
-
-    # Show help
-    python {__file__} --help
-
-CONFIGURATION FORMAT:
-    {{
-      "mcpServers": {{
-        "my-server": {{
-          "command": "python",
-          "args": ["my_server.py"]
-        }}
-      }}
-    }}
-
-    # Or single server format:
-    {{
+    # Configuration section
+    config_example = '''{
+  "mcpServers": {
+    "my-server": {
       "command": "python",
-      "args": ["my_server.py"],
-      "name": "my-server"
-    }}
+      "args": ["my_server.py"]
+    }
+  }
+}'''
 
-FEATURES:
-    • Interactive MCP server testing and debugging
-    • Support for multiple MCP servers in one session
-    • Real-time monitoring of server stdout/stderr
-    • Comprehensive logging with color-coded output
-    • Tools, Resources, and Prompts testing
-    • Color legend reference ([c] in main menu)
-    • Session logging to timestamped files
+    config_panel = Panel(
+        f"[dim]Configuration files are searched in this order:[/dim]\n"
+        "• [cyan]./mcp.json[/cyan] (current directory)\n"
+        "• [cyan]~/.cursor/mcp.json[/cyan] (user home)\n\n"
+        "[dim]Example configuration:[/dim]",
+        title="Configuration",
+        border_style="green",
+        padding=(1, 2)
+    )
+    console.print(config_panel)
 
-For more information, visit: https://github.com/granludo/mcp-inspector-cli
-"""
-    print(help_text)
+    # Display JSON example separately
+    json_panel = Panel(
+        Syntax(config_example, "json", theme="monokai", line_numbers=False),
+        border_style="dim green",
+        padding=(0, 2)
+    )
+    console.print(json_panel)
+    console.print()
+
+    # Features section
+    features = [
+        "🔧 Interactive MCP server testing and debugging",
+        "🔄 Support for multiple MCP servers in one session",
+        "📊 Real-time monitoring of server stdout/stderr",
+        "🎨 Rich terminal output with syntax highlighting",
+        "📋 Comprehensive logging with color-coded output",
+        "🛠️ Tools, Resources, and Prompts testing",
+        "📝 Session logging to timestamped files",
+        "⏳ Progress indicators for long-running operations",
+    ]
+
+    features_text = "\n".join(f"• {feature}" for feature in features)
+    features_panel = Panel(
+        features_text,
+        title="Features",
+        border_style="yellow",
+        padding=(1, 2)
+    )
+    console.print(features_panel)
+    console.print()
+
+    # Footer
+    footer_panel = Panel(
+        Align.center("[dim]For more information, visit:[/dim] [link=https://github.com/granludo/mcp-inspector-cli]https://github.com/granludo/mcp-inspector-cli[/link]"),
+        border_style="dim blue",
+        padding=(1, 2)
+    )
+    console.print(footer_panel)
 
 
 def main() -> None:
