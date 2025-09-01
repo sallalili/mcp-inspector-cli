@@ -1,6 +1,6 @@
 # MCP Inspector CLI Requirements
-# This project uses only Python standard library modules
-# No third-party dependencies required
+# Core dependencies
+rich>=13.0.0
 
 # For development and testing (optional):
 # pytest>=7.0.0
