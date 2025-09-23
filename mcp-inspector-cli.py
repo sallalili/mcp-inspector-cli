@@ -52,6 +52,16 @@ RICH_THEME = Theme({
     "panel.title": "bold blue",
 })
 
+# Ensure our own stdout/stderr can handle UTF-8 gracefully on Windows consoles
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    # Best-effort; continue if not supported
+    pass
+
 # Global console instance
 console = Console(theme=RICH_THEME)
 
@@ -112,6 +122,20 @@ class MCPTester:
         self.selected_index: int = -1
         self.selected_cmd: Optional[List[str]] = None
         self.selected_cwd: Optional[str] = None
+
+    def _build_child_env(self) -> Dict[str, str]:
+        """Build a clean environment for the child process with UTF-8 I/O enabled.
+
+        - Removes parent VIRTUAL_ENV to avoid uv warning when targeting another project
+        - Forces UTF-8 for Python stdio in the child process
+        """
+        env = os.environ.copy()
+        # Avoid uv warning when child project has its own .venv
+        env.pop("VIRTUAL_ENV", None)
+        # Force UTF-8 encoding for Python I/O in the child
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        return env
 
     def start_progress(self, description: str, total: Optional[float] = None) -> None:
         """Start a progress indicator for long-running operations"""
@@ -532,8 +556,11 @@ class MCPTester:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
                 cwd=cwd,
+                env=self._build_child_env(),
             )
         except FileNotFoundError:
             # If multiple servers are configured, don't silently fall back; let user pick another
@@ -556,8 +583,11 @@ class MCPTester:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
                 cwd=self.working_dir,
+                env=self._build_child_env(),
             )
 
         threading.Thread(target=self._stdout_reader, daemon=True).start()
